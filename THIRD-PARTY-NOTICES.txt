@@ -1,0 +1,3 @@
+EmulatorJS 4.2.3 -- GPL-3.0 -- https://github.com/EmulatorJS/EmulatorJS
+libretro mGBA core 4.2.3 -- MPL-2.0 -- https://github.com/mgba-emu/mgba
+Fetched by tools/fetch_emulatorjs.py. Not part of this project's source.

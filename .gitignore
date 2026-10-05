@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# No ROM, and nothing extracted from a ROM, ever enters this repository.
+# ---------------------------------------------------------------------------
+*.nes
+*.gb
+*.gbc
+*.sfc
+*.smc
+*.gba
+*.z64
+*.iso
+*.gcm
+*.rvz
+*.sav
+*.srm
+*.state
+*.elf
+*.map
+*.sym
+baserom*
+
+# Mega Drive ROMs are *.md -- but so is our documentation. Exclude the ROMs,
+# keep the docs. (Fleet-rule trap: a bare "*.md" line would hide STATUS.md.)
+*.md
+!README.md
+!STATUS.md
+!docs/*.md
+
+# Upstream trees and toolchains: fetched by tools/setup.sh on the user's machine,
+# never vendored. These contain every retail asset and must not be committed.
+/upstream/
+/agbcc/
+/toolchain/
+
+# The emulator runtime, fetched by tools/fetch_emulatorjs.py.
+/web/data/
+
+# Test output.
+/out/
+__pycache__/
+*.pyc
+*.log
