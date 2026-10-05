@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pokemon FireRed</title>
+<style>
+  :root {
+    --bg: #14100f; --panel: #1d1917; --fg: #f2ece9; --dim: #a39a95;
+    --line: #342d2a; --accent: #d2492f; --ok: #4caf7d; --warn: #e0a83a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #game { flex: 1; min-height: 0; display: none; }
+  #game.on { display: block; }
+
+  /* ---- ROM picker ---- */
+  #pick { flex: 1; min-height: 0; overflow-y: auto; display: flex;
+    align-items: center; justify-content: center; padding: 24px 16px; }
+  #pick.off { display: none; }
+  #card { width: 100%; max-width: 560px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  h1 { margin: 0 0 2px; font-size: 19px; letter-spacing: .2px; }
+  h1 span { color: var(--accent); }
+  .sub { color: var(--dim); font-size: 13px; margin: 0 0 18px; }
+  #drop { border: 1.5px dashed var(--line); border-radius: 11px; padding: 26px 18px;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  #drop:hover, #drop.hot { border-color: var(--accent); background: #241d1a; }
+  #drop b { display: block; font-size: 15px; margin-bottom: 4px; }
+  #drop small { color: var(--dim); }
+  #file { display: none; }
+  .note { margin: 16px 0 0; padding: 11px 13px; border-radius: 9px;
+    background: #171f1b; border: 1px solid #27362e; color: #bcd6c7; font-size: 12.5px; }
+  .note b { color: var(--ok); }
+  #msg { margin-top: 14px; font-size: 13px; min-height: 20px; }
+  #msg.err { color: var(--accent); }
+  #msg.ok { color: var(--ok); }
+  #msg.warn { color: var(--warn); }
+  #msg code { font: 12px/1.4 ui-monospace, monospace; color: var(--dim);
+    word-break: break-all; }
+  details { margin-top: 14px; color: var(--dim); font-size: 12.5px; }
+  summary { cursor: pointer; }
+  table { border-collapse: collapse; margin-top: 8px; font: 11.5px/1.5 ui-monospace, monospace; }
+  td { padding: 1px 10px 1px 0; white-space: nowrap; }
+
+  /* ---- status bar under the screen ---- */
+  #bar { padding: 6px 12px; color: var(--dim); font-size: 12px;
+    display: none; gap: 6px 16px; flex-wrap: wrap; align-items: center;
+    border-top: 1px solid var(--line); }
+  #bar.on { display: flex; }
+  #bar b { color: var(--fg); font-weight: 600; }
+  #bar button { background: none; border: 1px solid var(--line); color: var(--dim);
+    border-radius: 8px; padding: 2px 10px; font: inherit; cursor: pointer; }
+  #bar button:hover { color: var(--fg); border-color: var(--accent); }
+  #saved { color: var(--ok); }
+  @media (max-width: 680px) { #keys { display: none; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="pick">
+    <div id="card">
+      <h1>Pokemon <span>FireRed</span></h1>
+      <p class="sub">Built from the <a href="https://github.com/pret/pokefirered" target="_blank"
+        rel="noopener" style="color:var(--dim)">pret</a> decompilation. Bring your own cartridge dump.</p>
+
+      <div id="drop" tabindex="0" role="button" aria-label="Choose your ROM file">
+        <b>Choose your ROM</b>
+        <small>click, or drop a <code>.gba</code> file here</small>
+      </div>
+      <input type="file" id="file" accept=".gba,.bin,.zip,application/octet-stream">
+
+      <p class="note">Your file is read <b>in this browser only</b>. It is loaded into memory
+        with the File API and handed straight to the emulator &mdash; there is no upload, no
+        server call, and no copy kept on disk. Reload the page and you will be asked for it
+        again. In-game saves <b>are</b> kept, in this browser.</p>
+
+      <div id="msg"></div>
+
+      <details>
+        <summary>Which dumps are recognised</summary>
+        <table id="hashes"></table>
+        <p>Any other GBA file still boots &mdash; it is just not checked. The sha1 is computed
+          locally with the Web Crypto API.</p>
+      </details>
+    </div>
+  </div>
+
+  <div id="game"></div>
+
+  <div id="bar">
+    <span><b id="title">Pokemon FireRed</b></span>
+    <span id="keys">Keys: <b>Arrows</b> move &middot; <b>Z</b> A &middot; <b>X</b> B
+      &middot; <b>A</b>/<b>S</b> L/R &middot; <b>Enter</b> Start &middot; <b>Shift</b> Select.
+      Gamepads and touch work too.</span>
+    <span id="saved"></span>
+    <button id="mute" type="button">Mute</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const q = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  const log = (m) => console.log("PFR: " + m);
+
+  // sha1 -> what that dump is, from upstream's own *.sha1 files at the pinned
+  // revision 037335f4c725d7c9aecdac87066f2002b4bd7e14.
+  const KNOWN = {
+    "dd5945db9b930750cb39d00c84da8571feebf417": ["FireRed (USA, Europe) (Rev 1)", "firered_rev1", true],
+    "41cb23d8dccc8ebd7c649cd8fbb58eeace6e2fdc": ["FireRed (USA) (Rev 0)", "firered", true],
+    "baa452d0b24629dd7782cfc07a8984085dde1311": ["FireRed (Switch Online)", "firered_switch", true],
+    "7862c67bdecbe21d1d69ce082ce34327e1c6ed5e": ["LeafGreen (USA, Europe) (Rev 1)", "leafgreen_rev1", false],
+    "574fa542ffebb14be69902d1d36f1ec0a4afd71e": ["LeafGreen (USA) (Rev 0)", "leafgreen", false],
+    "62b9fc77549dbc67032eb6cbd0ea6ad3b825690f": ["LeafGreen (Switch Online)", "leafgreen_switch", false],
+  };
+  const PREFERRED = "dd5945db9b930750cb39d00c84da8571feebf417";
+
+  $("hashes").innerHTML = Object.entries(KNOWN).map(
+    ([h, v]) => `<tr><td>${v[0]}</td><td>${h.slice(0, 12)}&hellip;</td></tr>`).join("");
+
+  // ---- test / embed hooks, read once ----------------------------------------
+  const muted = q.get("mute") === "1";
+  const autostart = q.get("autostart") === "1";
+
+  // ---- same-origin lockdown --------------------------------------------------
+  // "Your ROM is never uploaded" should be enforced, not just promised, so every
+  // way this page could reach another origin is closed before the emulator is
+  // loaded.  This is not hypothetical: EmulatorJS fetches
+  // https://cdn.emulatorjs.org/stable/data/version.json on every load to check
+  // for updates, and offers a netplay WebSocket.  Neither carries the ROM, but a
+  // page that holds someone's cartridge dump in memory has no business talking
+  // to anyone.  Blocked attempts are listed in window.__pfr.blocked.
+  const blocked = [];
+  const sameOrigin = (u) => {
+    try {
+      const x = new URL(String(u), location.href);
+      return x.origin === location.origin || x.protocol === "blob:" || x.protocol === "data:";
+    } catch (e) { return false; }
+  };
+  const realFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const u = (typeof input === "string" || input instanceof URL) ? input : (input && input.url);
+    if (!sameOrigin(u)) {
+      blocked.push(String(u)); log("blocked cross-origin fetch: " + u);
+      // resolve, don't reject: a rejection here becomes an unhandled rejection
+      // inside EmulatorJS's update check, which is noise, not information.
+      return Promise.resolve(new Response("", { status: 403, statusText: "blocked" }));
+    }
+    return realFetch(input, init);
+  };
+  const realOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) {
+    if (!sameOrigin(u)) { blocked.push(String(u)); throw new Error("blocked cross-origin XHR: " + u); }
+    return realOpen.apply(this, arguments);
+  };
+  navigator.sendBeacon = () => false;
+  const RealWS = window.WebSocket;
+  window.WebSocket = function (u) {
+    if (!sameOrigin(u)) { blocked.push(String(u)); throw new Error("blocked WebSocket: " + u); }
+    return new RealWS(...arguments);
+  };
+
+  // ---- in-game save persistence --------------------------------------------
+  // EmulatorJS mounts /data/saves on emscripten's IDBFS with autoPersist, and
+  // calls FS.syncfs(true) when it mounts, so the core's .srm round-trips through
+  // IndexedDB.
+  //
+  // Two things stop that working on stock EmulatorJS 4.2.3:
+  //
+  // 1. The save file is named after EJS_gameName, NOT after the file the user
+  //    picked. The ROM arrives as a blob: URL whose "filename" is a fresh UUID
+  //    on every load, so without a fixed gameName the save lands under a new
+  //    name each time and looks lost. Hence GAME_NAME below.
+  //
+  // 2. **emulator.js:1092 registers a beforeunload listener that fires the
+  //    `exit` event, and GameManager's exit handler ends in
+  //    FS.unmount("/data/saves") -- after which the IndexedDB store backing that
+  //    mount comes back EMPTY.** So stock EmulatorJS destroys the battery save
+  //    every time the page is left. It is a race against the page dying, so it
+  //    passes sometimes, which is worse than failing every time. Found by the
+  //    pokegold agent; reproduced here (tools/save_soak.py).
+  //
+  //    The listener's handle is discarded at the call site, so removeEventListener
+  //    is not available. Instead ejsUnloadDropped (below) wraps
+  //    window.addEventListener before loader.js is injected and refuses that one
+  //    registration, and we do the save-out ourselves: write and sync, never
+  //    unmount.
+  const GAME_NAME = "pokefirered";
+  let lastSaveLen = -1, lastSaveSig = "";
+
+  // Is /data/saves still a live IDBFS mount?  Calling syncfs on a path that is
+  // no longer an IDBFS mount makes emscripten's reconcile delete the remote
+  // entries -- a "flush" that wipes the save. Every flush is gated on this.
+  function savesAlive() {
+    const E = window.EJS_emulator;
+    try {
+      const n = E.gameManager.FS.lookupPath("/data/saves").node;
+      return !!(E.started && n.mount && n.mount.opts && n.mount.opts.autoPersist);
+    } catch (e) { return false; }
+  }
+
+  function flushSave(why) {
+    const E = window.EJS_emulator;
+    if (!E || !E.gameManager || !savesAlive()) return null;
+    let bytes = null;
+    try {
+      E.gameManager.saveSaveFiles();            // core SRAM -> FS
+      // getSaveFile() with NO argument calls saveSaveFiles() for you, writing
+      // the core's current SRAM over the file. Called before the core has loaded
+      // a restored save, that overwrites a good save with blanks and then
+      // reports the blanks. Pass false: read-only.
+      bytes = E.gameManager.getSaveFile(false);
+    } catch (e) { log("save read failed: " + e); return null; }
+    if (!bytes || !bytes.length) return null;
+    try {
+      E.gameManager.FS.syncfs(false, (err) => {  // FS -> IndexedDB
+        if (err) log("syncfs error: " + err);
+      });
+    } catch (e) { log("syncfs failed: " + e); }
+    // cheap change signature so the status line only moves on a real save
+    let sig = bytes.length + ":";
+    for (let i = 0; i < bytes.length; i += 4096) sig += bytes[i].toString(16);
+    if (sig !== lastSaveSig) {
+      lastSaveSig = sig; lastSaveLen = bytes.length;
+      const t = new Date().toLocaleTimeString();
+      $("saved").textContent = `save kept in this browser (${(bytes.length / 1024) | 0} KB, ${t})`;
+      log(`save flushed ${bytes.length} bytes (${why})`);
+    }
+    return bytes;
+  }
+
+  // ---- boot ----------------------------------------------------------------
+  let booted = false;
+
+  function boot(file, bytes) {
+    if (booted) return;
+    booted = true;
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+
+    window.EJS_player = "#game";
+    window.EJS_core = "gba";
+    window.EJS_gameName = GAME_NAME;          // fixes the save file name, see above
+    window.EJS_gameUrl = url;                 // blob: -- stays in this tab's memory
+    window.EJS_pathtodata = "data/";
+    window.EJS_threads = false;
+    window.EJS_startOnLoaded = autostart;     // otherwise one click starts it (and audio)
+    window.EJS_disableDatabases = false;      // we want the save database
+    window.EJS_CacheLimit = 0;                // never copy the ROM into IndexedDB
+    window.EJS_volume = muted ? 0 : 0.5;
+    window.EJS_color = "#d2492f";
+    window.EJS_backgroundColor = "#14100f";
+    window.EJS_startButtonName = "Play";
+    window.EJS_defaultOptions = { "save-state-location": "browser" };
+
+    // libretro joypad ids: 0 B, 2 Select, 3 Start, 4 Up, 5 Down, 6 Left, 7 Right, 8 A, 10 L, 11 R
+    const k = (v, g) => ({ value: v, value2: g || "" });
+    window.EJS_defaultControls = {
+      0: {
+        8: k("z", "BUTTON_1"), 0: k("x", "BUTTON_2"),
+        2: k("shift", "SELECT"), 3: k("enter", "START"),
+        4: k("up arrow", "DPAD_UP"), 5: k("down arrow", "DPAD_DOWN"),
+        6: k("left arrow", "DPAD_LEFT"), 7: k("right arrow", "DPAD_RIGHT"),
+        10: k("a", "LEFT_TOP_SHOULDER"), 11: k("s", "RIGHT_TOP_SHOULDER"),
+      }, 1: {}, 2: {}, 3: {},
+    };
+
+    window.EJS_onGameStart = function () {
+      log("game started");
+      const E = window.EJS_emulator;
+      if (muted) { try { E.setVolume(0); } catch (e) {} }
+      setInterval(() => flushSave("timer"), 5000);
+      // scripted input for the headless test: ?keys=seconds:id:holdSeconds,...
+      for (const ev of (q.get("keys") || "").split(",").filter(Boolean)) {
+        const [t, id, dur] = ev.split(":");
+        setTimeout(() => E.gameManager.simulateInput(0, +id, 1), +t * 1000);
+        setTimeout(() => E.gameManager.simulateInput(0, +id, 0), (+t + (+dur || 0.1)) * 1000);
+      }
+      window.__pfr.started = true;
+    };
+
+    // Drop EmulatorJS's own beforeunload (the one whose exit handler unmounts
+    // /data/saves and empties the store) and do the save-out ourselves.
+    // ?ejsunload=keep leaves it in place, so the soak test can measure both arms
+    // of the experiment against the same page.
+    const keepEjsUnload = q.get("ejsunload") === "keep";
+    if (!keepEjsUnload) {
+      const realAdd = window.addEventListener.bind(window);
+      window.addEventListener = function (type, fn, opts) {
+        if (type === "beforeunload" && !(fn && fn.__keep)) {
+          log("dropped EmulatorJS's beforeunload (it unmounts /data/saves)");
+          return;
+        }
+        return realAdd(type, fn, opts);
+      };
+    }
+
+    function saveOut(why) {
+      // write and sync. Never unmount, never restart the core.
+      flushSave(why);
+    }
+    // __keep must be on the function actually handed to addEventListener, or our
+    // own wrapper drops our own handler.
+    const onUnload = () => saveOut("beforeunload");
+    onUnload.__keep = true;
+    window.addEventListener("beforeunload", onUnload);
+    for (const e of ["pagehide", "blur"]) addEventListener(e, () => saveOut(e));
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") saveOut("hidden");
+    });
+
+    $("pick").classList.add("off");
+    $("game").classList.add("on");
+    $("bar").classList.add("on");
+
+    const s = document.createElement("script");
+    s.src = "data/loader.js";
+    s.onerror = () => {
+      // put the picker back, or the message lands on a hidden panel and a
+      // missing runtime looks like a blank page
+      booted = false;
+      $("pick").classList.remove("off");
+      $("game").classList.remove("on");
+      $("bar").classList.remove("on");
+      show("err", "The emulator runtime is missing from <code>web/data/</code>. Run "
+        + "<code>python3 tools/fetch_emulatorjs.py</code> and reload.");
+    };
+    document.body.appendChild(s);
+  }
+
+  function show(cls, html) { const m = $("msg"); m.className = cls; m.innerHTML = html; }
+
+  async function take(file) {
+    show("", "Reading " + file.name + " …");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-1", bytes))]
+      .map((b) => b.toString(16).padStart(2, "0")).join("");
+    const hit = KNOWN[hex];
+    log(`picked ${file.name} ${bytes.length} bytes sha1 ${hex}`);
+    window.__pfr.sha1 = hex;
+    window.__pfr.size = bytes.length;
+
+    if (hit && hit[2]) {
+      show("ok", `${hit[0]} — recognised. <code>${hex}</code>`);
+    } else if (hit) {
+      show("warn", `${hit[0]}. That is LeafGreen; this page is built for FireRed, but it
+        will run. <code>${hex}</code>`);
+    } else {
+      show("warn", `Not a dump this build knows. Booting it anyway.<br><code>${hex}</code>`);
+    }
+    setTimeout(() => boot(file, bytes), hit && hit[2] ? 350 : 1200);
+  }
+
+  $("drop").onclick = () => $("file").click();
+  $("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
+  $("file").onchange = (e) => { if (e.target.files[0]) take(e.target.files[0]); };
+  for (const e of ["dragenter", "dragover"]) {
+    $("drop").addEventListener(e, (ev) => { ev.preventDefault(); $("drop").classList.add("hot"); });
+  }
+  for (const e of ["dragleave", "drop"]) {
+    $("drop").addEventListener(e, () => $("drop").classList.remove("hot"));
+  }
+  $("drop").addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    const f = ev.dataTransfer.files[0];
+    if (f) take(f);
+  });
+  $("mute").onclick = () => {
+    const E = window.EJS_emulator; if (!E) return;
+    const on = $("mute").textContent === "Mute";
+    E.setVolume(on ? 0 : 0.5);
+    $("mute").textContent = on ? "Unmute" : "Mute";
+  };
+  if (muted) $("mute").textContent = "Unmute";
+
+  // ---- hooks the headless test reads -------------------------------------
+  window.__pfr = {
+    version: 1, started: false, sha1: null, size: 0, blocked,
+    press(id, ms) {
+      const g = window.EJS_emulator.gameManager;
+      g.simulateInput(0, id, 1);
+      setTimeout(() => g.simulateInput(0, id, 0), ms || 90);
+    },
+    save: (why) => { const b = flushSave(why || "test"); return b ? b.length : 0; },
+    saveLen: () => lastSaveLen,
+    // sha1 of the save file, so the test can prove the same bytes came back
+    async saveSha1() {
+      const b = flushSave("test");
+      if (!b) return null;
+      const d = await crypto.subtle.digest("SHA-1", b);
+      return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
+    },
+    // write a known pattern into the core's save file and persist it, so a
+    // reload can prove the IndexedDB round trip without a 20-minute playthrough
+    async seedSave(n) {
+      const E = window.EJS_emulator, g = E.gameManager;
+      const path = g.getSaveFilePath();
+      const cur = g.getSaveFile(false);   // read-only: see flushSave
+      const bytes = new Uint8Array(cur && cur.length ? cur.length : (n || 131072));
+      for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37 + 11) & 0xff;
+      g.FS.writeFile(path, bytes);
+      await new Promise((r) => g.FS.syncfs(false, r));
+      const d = await crypto.subtle.digest("SHA-1", bytes);
+      return { path, len: bytes.length,
+        sha1: [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("") };
+    },
+    async readSave() {
+      const g = window.EJS_emulator.gameManager;
+      const path = g.getSaveFilePath();
+      if (!g.FS.analyzePath(path).exists) return null;
+      const bytes = g.FS.readFile(path);
+      const d = await crypto.subtle.digest("SHA-1", bytes);
+      return { path, len: bytes.length,
+        sha1: [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("") };
+    },
+    // What is actually in durable storage, read straight out of the IndexedDB
+    // database emscripten's IDBFS keeps for the /data/saves mount.  This is the
+    // honest place to ask "did the save survive?": the in-memory file is rewritten
+    // by the running core within seconds of boot, so comparing that would be a
+    // race, not a test.  Works with no emulator loaded at all -- and that is how
+    // it should be called, because the core clobbers the file on boot.
+    //
+    // ENUMERATE, never guess the name: indexedDB.open(name) CREATES a missing
+    // database, which then truthfully reports itself empty -- indistinguishable
+    // from a destroyed save. On this Chrome the database is literally
+    // "/data/saves" with store FILE_DATA, but enumerating costs nothing and
+    // cannot invent a result.
+    async idbSave(key) {
+      let names = [];
+      try {
+        names = (await indexedDB.databases()).map((d) => String(d.name));
+      } catch (e) { /* older browsers: fall through to the known name */ }
+      const dbName = names.find((n) => n.indexOf("saves") !== -1)
+        || (names.length ? null : "/data/saves");
+      if (!dbName) return { databases: names, db: null, files: {}, found: null };
+      const db = await new Promise((res, rej) => {
+        const r = indexedDB.open(dbName);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+        r.onupgradeneeded = () => { try { r.transaction.abort(); } catch (e) {} };
+      }).catch(() => null);
+      if (!db || !db.objectStoreNames.contains("FILE_DATA")) {
+        return { databases: names, db: dbName, files: {}, found: null };
+      }
+      const store = db.transaction("FILE_DATA", "readonly").objectStore("FILE_DATA");
+      const keys = await new Promise((res) => {
+        const r = store.getAllKeys(); r.onsuccess = () => res(r.result); r.onerror = () => res([]);
+      });
+      const get = (k) => new Promise((res) => {
+        const r = store.get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(null);
+      });
+      // a map of every file in the store and its size: "files: {}" is a far
+      // easier failure to recognise than a hash that drifted
+      const files = {};
+      for (const k of keys) {
+        const rec = await get(k);
+        const c = rec && rec.contents;
+        if (c && typeof c.length === "number") files[String(k)] = c.length;
+      }
+      const want = key || keys.map(String).find((k) => k.endsWith(".srm"));
+      if (!want) return { databases: names, db: dbName, files, keys: keys.map(String), found: null };
+      const rec = await get(want);
+      const bytes = rec && rec.contents;
+      if (!bytes) {
+        return { databases: names, db: dbName, files, keys: keys.map(String),
+                 found: want, len: 0, sha1: null };
+      }
+      const d = await crypto.subtle.digest("SHA-1", bytes);
+      return { databases: names, db: dbName, files, keys: keys.map(String),
+        found: want, len: bytes.length,
+        sha1: [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("") };
+    },
+    // Where the emulator's screen sits in the page, as fractions of the
+    // viewport.  The test crops its screenshot to this before measuring
+    // brightness -- it must not score the page's own chrome as "picture".
+    //
+    // Note there is deliberately no "read the canvas pixels" helper here:
+    // drawImage() on this canvas returns an empty buffer, because the WebGL
+    // context has no preserveDrawingBuffer, and a brightness check built on it
+    // reports a perfect black screen while the game is plainly running. The
+    // screenshot Chrome takes is the ground truth; measure that.
+    screen() {
+      const c = document.querySelector("#game canvas");
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      const W = innerWidth, H = innerHeight;
+      return { ok: r.width > 0 && r.height > 0, w: c.width, h: c.height,
+               box: [r.left / W, r.top / H, r.right / W, r.bottom / H] };
+    },
+  };
+
+  // Test-only convenience: ?rom=<same-origin url> skips the picker.  It is NOT
+  // how a person uses this page -- it exists so the headless test can also cover
+  // the non-picker path.  No remote URL is ever fetched: same origin only.
+  const romUrl = q.get("rom");
+  if (romUrl && !/^[a-z]+:/i.test(romUrl)) {
+    fetch(romUrl).then((r) => r.arrayBuffer())
+      .then((b) => take(new File([b], romUrl.split("/").pop())))
+      .catch((e) => show("err", "could not read " + romUrl + ": " + e));
+  }
+  log("page ready");
+})();
+</script>
+</body>
+</html>
